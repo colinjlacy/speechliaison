@@ -8,11 +8,12 @@ import (
 )
 
 type ContextualError struct {
-	UserId  string
-	JobName string
-	Context string
-	Log     string
-	Action  string
+	UserId     string
+	JobName    string
+	Context    string
+	Log        string
+	Action     string
+	SpokenCode string
 }
 
 type CursorNotFoundError ContextualError
@@ -21,10 +22,22 @@ func (e CursorNotFoundError) Error() string {
 	return fmt.Sprintf("[ERROR] UserId %s, JobName %s, Context %s, Log %s", e.UserId, e.JobName, e.Context, e.Log)
 }
 
+type SyncDocNotFoundError ContextualError
+
+func (e SyncDocNotFoundError) Error() string {
+	return fmt.Sprintf("[ERROR] SpokenCode %s, Context %s, Log %s", e.SpokenCode, e.Context, e.Log)
+}
+
 type CursorExpiredError ContextualError
 
 func (e CursorExpiredError) Error() string {
 	return fmt.Sprintf("[ERROR] UserId %s, JobName %s, Context %s, Log %s", e.UserId, e.JobName, e.Context, e.Log)
+}
+
+type SyncDocExpiredError ContextualError
+
+func (e SyncDocExpiredError) Error() string {
+	return fmt.Sprintf("[ERROR] SpokenCode %s, Context %s, Log %s", e.SpokenCode, e.Context, e.Log)
 }
 
 type MissingJobNameError ContextualError
@@ -64,7 +77,13 @@ func AnalyzeError(e error) (r alexa.Response) {
 		r = respond.Openly("It's been a while since your last scan, and you'll need to specify a job first.  You can create a new job, or use a previous job by telling me to use the job you have in mind, or telling me to scan a page to that job.  Just tell me which you'd like to do.", false)
 		break
 	case CursorNotFoundError:
-		r = respond.Openly("You'll need to specify a job first.  You can create a new job, or tell me to scan a page to a job.  Just tell me which you'd like to do.", false)
+		r = respond.Openly("You'll need to specify a job first.  You can create a new job, or tell me to scan a page to an existing job.  Just tell me which you'd like to do.", false)
+		break
+	case SyncDocNotFoundError:
+		r = respond.Openly("Unfortunately I was not able to find a match to the code you specified.  Please speak the prompt given on your screen again, or click cancel, and retry the sync process.", false)
+		break
+	case SyncDocExpiredError:
+		r = respond.Openly("While I was able to find a matching code to the one you spoke, it has unfortunately expired.  Please click cancel, and retry the sync process while making sure to speak the code given within a few minutes.", false)
 		break
 	case MissingJobNameError:
 		r = respond.Openly("You'll need to specify a job first.  You can create a new job, or tell me to scan a page to a job.  Just tell me which you'd like to do.", false)

@@ -5,6 +5,7 @@ import (
 	"github.com/arienmalec/alexa-go"
 	"github.com/aws/aws-lambda-go/lambda"
 	"os"
+	"speechLiason/cloud_resources"
 	"speechLiason/errors"
 	"speechLiason/key_access"
 	"speechLiason/queue_connect"
@@ -17,30 +18,55 @@ func main() {
 
 func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 	u := request.Session.User.UserID
-	j := request.Body.Intent.Slots["jobName"].Value
-	var response alexa.Response
+	var r alexa.Response
 	switch request.Body.Intent.Name {
+	case "sync":
+		c := request.Body.Intent.Slots["spokenCode"].Value
+		t := request.Context.System.APIAccessToken
+		d := request.Context.System.Device.DeviceID
+		r = Sync(c, u, t, d)
+		break
 	case "createJob":
-		response = CreateJob(j, u)
+		j := request.Body.Intent.Slots["jobName"].Value
+		r = CreateJob(j, u)
 		break
 	case "scan":
+		j := request.Body.Intent.Slots["jobName"].Value
 		_,_ =fmt.Fprintf(os.Stdout, "going to scan with user %s, and jobname %s", u, j)
-		response = Scan(j, u)
+		r = Scan(j, u)
 		break
 	case "emailJob":
-		response = Deliver(j, u)
+		j := request.Body.Intent.Slots["jobName"].Value
+		r = Deliver(j, u)
 		break
 	case "AMAZON.HelpIntent":
-		response = respond.Welcome()
+		r = respond.Welcome()
 		break
 	case "AMAZON.FallbackIntent":
-		response = respond.Welcome()
+		r = respond.Welcome()
 		break
 	default:
-		response = respond.Welcome()
+		r = respond.Welcome()
 		break
 	}
-	return response, nil
+	return r, nil
+}
+
+func Sync(code string, voiceUserId string, token string, deviceId string) alexa.Response {
+	key := key_access.GetKey()
+	if err := queue_connect.InitConnection("reborne", key); err != nil {
+		return errors.AnalyzeError(err)
+	}
+	defer queue_connect.CloseConnection()
+	addr, err := cloud_resources.GetDeviceAddress(token, deviceId)
+	if err != nil {
+		return errors.AnalyzeError(err)
+	}
+	err = queue_connect.SyncAccounts(code, voiceUserId, addr)
+	if err != nil {
+		return errors.AnalyzeError(err)
+	}
+	return respond.Positively("sync your account", false)
 }
 
 func Scan(jobName, voiceUserId string) alexa.Response {
