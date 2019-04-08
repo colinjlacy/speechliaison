@@ -63,55 +63,64 @@ func CloseConnection() {
 	_ = client.Close()
 }
 
-func SendScanCommand(jobName string, voiceUserId string) error {
+func SendScanCommand(jobName string, voiceUserId, possibleSyncUserId string) (syncUserId, jobCursor string, err error) {
 	j, err := setJobName(jobName, voiceUserId)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	// TODO: set user ID
+	u := possibleSyncUserId
+	if u == "" {
+		// TODO: set user ID
+	}
 	s := scanDoc{"", voiceUserId, j}
 	if _, _, err := client.Collection("scan").Add(ctx, s); err != nil {
-		return errors.SystemError{JobName: jobName, UserId: voiceUserId, Context: "SendScanCommand", Log: fmt.Sprintf("there was a problem creating the scan command: %s", err)}
+		return u, j, errors.SystemError{JobName: j, UserId: voiceUserId, Context: "SendScanCommand", Log: fmt.Sprintf("there was a problem creating the scan command: %s", err)}
 	}
-	if err := SetCursor(jobName, voiceUserId); err != nil {
-		return err
+	_, _, err = SetCursor(j, voiceUserId, u)
+	if err != nil {
+		return u, j, err
 	}
-	return nil
+	return u, j, nil
 }
 
-func SendDeliveryCommand(jobName, voiceUserId, method, destination string) error {
+func SendDeliveryCommand(jobName, voiceUserId, possibleSyncUserId, method, destination string) (syncUserId, jobCursor string, err error) {
 	j, err := setJobName(jobName, voiceUserId)
 	if err != nil {
-		return err
+		return possibleSyncUserId, "", err
 	}
 	if method != "email" {
-		return errors.UnsupportedOperationError{ContextualError: errors.ContextualError{JobName: jobName, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("method for delivery %s not yet supported", method)}, ErroneousOperation: method}
+		return possibleSyncUserId, j, errors.UnsupportedOperationError{ContextualError: errors.ContextualError{JobName: j, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("method for delivery %s not yet supported", method)}, ErroneousOperation: method}
 	}
 	if !isValidEmail(destination) {
-		return errors.InvalidInputError{ContextualError: errors.ContextualError{JobName: jobName, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("invalid email address %s", destination)}, ErroneousInput: "email address"}
+		return possibleSyncUserId, j, errors.InvalidInputError{ContextualError: errors.ContextualError{JobName: j, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("invalid email address %s", destination)}, ErroneousInput: "email address"}
 	}
-	// TODO: set user ID
-	d := deliverDoc{"", voiceUserId, j, method, destination}
+	u := possibleSyncUserId
+	if u == "" {
+		// TODO: set user ID
+	}
+	d := deliverDoc{u, voiceUserId, j, method, destination}
 	_, err = client.Doc("delivery").Create(ctx, d)
 	if err != nil {
-		return errors.SystemError{JobName: jobName, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("could not create delivery command: %s", err)}
+		return u, j, errors.SystemError{JobName: j, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("could not create delivery command: %s", err)}
 	}
-	return nil
+	return u, j, nil
 }
 
-func SetCursor(jobName, voiceUserId string) (err error) {
+func SetCursor(jobName, voiceUserId, possibleSyncUserId string) (syncUserId, jobCursor string, err error) {
 	if jobName == "" {
-		err = errors.MissingJobNameError{JobName: "", UserId: voiceUserId, Context: "SetCursor", Log: "could not set cursor without a job name"}
-		return
+		return possibleSyncUserId, "", errors.MissingJobNameError{JobName: jobName, UserId: voiceUserId, Context: "SetCursor", Log: "could not set cursor without a job name"}
 	}
 	ref := client.Collection("cursor").Doc(voiceUserId)
-	// TODO: set user ID
-	c := cursorDoc{UserId: "", Set: time.Now(), JobName: jobName}
+	u := possibleSyncUserId
+	if u == "" {
+		// TODO: set user ID
+	}
+	c := cursorDoc{UserId: u, Set: time.Now(), JobName: jobName}
 	_, err = ref.Set(ctx, c)
 	if err != nil {
 		err = errors.SystemError{JobName: jobName, UserId: voiceUserId, Context: "SetCursor", Log: fmt.Sprintf("could not set new cursor doc: %s", err)}
 	}
-	return
+	return u, jobName, err
 }
 
 func SyncAccounts(spokenCode string, voiceUserId string, deviceAddress cloud_resources.DeviceAddress) (err error) {
@@ -147,9 +156,11 @@ func setJobName(inputName, voiceUserId string) (outputName string, err error) {
 	return
 }
 
-func isCursorExpired(c cursorDoc) bool {
-	s := time.Since(c.Set)
-	return s.Minutes() > cursorTtl.Minutes()
+func setUserId(voiceUserId string) (userId string, err error) {
+	// check session attributes
+	// check dynamodb for user mapping
+	// check for completed sync doc
+	return
 }
 
 func getCursorDoc(voiceUserId string) (cursor cursorDoc, err error) {
@@ -165,6 +176,11 @@ func getCursorDoc(voiceUserId string) (cursor cursorDoc, err error) {
 		return cursorDoc{}, errors.SystemError{JobName: "", UserId: voiceUserId, Context: "getCursorDoc", Log: "cursor doc snapshot doesn't exist"}
 	}
 	return
+}
+
+func isCursorExpired(c cursorDoc) bool {
+	s := time.Since(c.Set)
+	return s.Minutes() > cursorTtl.Minutes()
 }
 
 func isValidEmail(email string) bool {
