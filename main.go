@@ -27,9 +27,15 @@ func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 	var s string
 	var p string
 	u := request.Session.User.UserID
-	s = request.Session.Attributes["syncUserId"].(string)
-	p = request.Session.Attributes["previousJobCursor"].(string)
+	if request.Session.Attributes["syncUserId"] != nil {
+		s = request.Session.Attributes["syncUserId"].(string)
+	}
+	if request.Session.Attributes["previousJobCursor"] != nil {
+		p = request.Session.Attributes["previousJobCursor"].(string)
+	}
 	var r alexa.Response
+	fmt.Print("request body", request.Body)
+	fmt.Print("request session", request.Session)
 	switch request.Body.Intent.Name {
 	case "sync":
 		c := request.Body.Intent.Slots["spokenCode"].Value
@@ -53,11 +59,12 @@ func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 		r = Scan(j, u, s)
 		break
 	case "emailJob":
+		t := request.Context.System.APIAccessToken
 		j := request.Body.Intent.Slots["jobName"].Value
 		if j == "" {
 			j = p
 		}
-		r = Deliver(j, u, s)
+		r = Deliver(t, j, u, s)
 		break
 	case "AMAZON.HelpIntent":
 		r = respond.Welcome()
@@ -75,55 +82,59 @@ func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 func Sync(code string, voiceUserId string, token string, deviceId string) alexa.Response {
 	key := key_access.GetKey()
 	if err := queue_connect.InitConnection("reborne", key); err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, "", "")
 	}
 	defer queue_connect.CloseConnection()
 	addr, err := cloud_resources.GetDeviceAddress(token, deviceId)
 	if err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, "", "")
 	}
 	err = queue_connect.SyncAccounts(code, voiceUserId, addr)
 	if err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, "", "")
 	}
 	return respond.Positively("sync your account", false, "", "")
 }
 
-func Scan(jobName, voiceUserId, syncUserId string) alexa.Response {
+func Scan(jobName, voiceUserId, possibleSyncUserId string) alexa.Response {
 	key := key_access.GetKey()
 	if err := queue_connect.InitConnection("reborne", key); err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, possibleSyncUserId, jobName)
 	}
 	defer queue_connect.CloseConnection()
-	u, j, err := queue_connect.SendScanCommand(jobName, voiceUserId, syncUserId)
+	u, j, err := queue_connect.SendScanCommand(jobName, voiceUserId, possibleSyncUserId)
 	if err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, u, j)
 	}
 	return respond.Positively("scan a page", false, u, j)
 }
 
-func CreateJob(jobName, voiceUserId, syncUserId string) alexa.Response {
+func CreateJob(jobName, voiceUserId, possibleSyncUserId string) alexa.Response {
 	key := key_access.GetKey()
 	if err := queue_connect.InitConnection("reborne", key); err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, possibleSyncUserId, jobName)
 	}
 	defer queue_connect.CloseConnection()
-	u, j, err := queue_connect.SetCursor(jobName, voiceUserId, syncUserId)
+	u, j, err := queue_connect.SetCursor(jobName, voiceUserId, possibleSyncUserId)
 	if err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, u, j)
 	}
 	return respond.Positively("create a job", false, u, j)
 }
 
-func Deliver(jobName, voiceUserId, syncUserId string) alexa.Response {
+func Deliver(token, jobName, voiceUserId, possibleSyncUserId string) alexa.Response {
 	key := key_access.GetKey()
 	if err := queue_connect.InitConnection("reborne", key); err != nil {
-		return errors.AnalyzeError(err)
+		return errors.AnalyzeError(err, possibleSyncUserId, jobName)
 	}
 	defer queue_connect.CloseConnection()
-	u, j, err := queue_connect.SendDeliveryCommand(jobName, voiceUserId, syncUserId, "email", "colinjlacy@gmail.com");
-	if err != nil {
-		return errors.AnalyzeError(err)
+	email, err := cloud_resources.GetUserEmail(token, voiceUserId)
+	if err := queue_connect.InitConnection("reborne", key); err != nil {
+		return errors.AnalyzeError(err, possibleSyncUserId, jobName)
 	}
-	return respond.Positively("email job " + jobName, false, u, j)
+	u, j, err := queue_connect.SendDeliveryCommand(jobName, voiceUserId, possibleSyncUserId, "email", email)
+	if err != nil {
+		return errors.AnalyzeError(err, u, j)
+	}
+	return respond.Positively("email the job " + jobName, false, u, j)
 }

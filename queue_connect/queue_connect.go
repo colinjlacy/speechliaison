@@ -63,68 +63,67 @@ func CloseConnection() {
 	_ = client.Close()
 }
 
-func SendScanCommand(jobName string, voiceUserId, possibleSyncUserId string) (syncUserId, jobCursor string, err error) {
-	j, err := setJobName(jobName, voiceUserId)
+func SendScanCommand(jobName string, voiceUserId, possibleSyncUserId string) (syncUserId, sessionJobName string, err error) {
+	sessionJobName, err = setJobName(jobName, voiceUserId)
 	if err != nil {
-		return "", "", err
+		return
 	}
-	u := possibleSyncUserId
-	if u == "" {
-		// TODO: set user ID
+	syncUserId, err = getUserId(voiceUserId, possibleSyncUserId)
+	if err != nil {
+		return
 	}
-	s := scanDoc{"", voiceUserId, j}
+	s := scanDoc{syncUserId, voiceUserId, sessionJobName}
 	if _, _, err := client.Collection("scan").Add(ctx, s); err != nil {
-		return u, j, errors.SystemError{JobName: j, UserId: voiceUserId, Context: "SendScanCommand", Log: fmt.Sprintf("there was a problem creating the scan command: %s", err)}
+		return syncUserId, sessionJobName, errors.SystemError{JobName: sessionJobName, UserId: syncUserId, Context: "SendScanCommand", Log: fmt.Sprintf("there was a problem creating the scan command: %s", err)}
 	}
-	_, _, err = SetCursor(j, voiceUserId, u)
-	if err != nil {
-		return u, j, err
-	}
-	return u, j, nil
+	_, _, err = SetCursor(sessionJobName, voiceUserId, syncUserId)
+	return
 }
 
-func SendDeliveryCommand(jobName, voiceUserId, possibleSyncUserId, method, destination string) (syncUserId, jobCursor string, err error) {
-	j, err := setJobName(jobName, voiceUserId)
+// TODO: fix delivery, log output [could not create delivery command: firestore: nil DocumentRef]
+func SendDeliveryCommand(jobName, voiceUserId, possibleSyncUserId, method, destination string) (syncUserId, sessionJobName string, err error) {
+	sessionJobName, err = setJobName(jobName, voiceUserId)
 	if err != nil {
 		return possibleSyncUserId, "", err
 	}
 	if method != "email" {
-		return possibleSyncUserId, j, errors.UnsupportedOperationError{ContextualError: errors.ContextualError{JobName: j, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("method for delivery %s not yet supported", method)}, ErroneousOperation: method}
+		return possibleSyncUserId, sessionJobName, errors.UnsupportedOperationError{ContextualError: errors.ContextualError{JobName: sessionJobName, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("method for delivery %s not yet supported", method)}, ErroneousOperation: method}
 	}
 	if !isValidEmail(destination) {
-		return possibleSyncUserId, j, errors.InvalidInputError{ContextualError: errors.ContextualError{JobName: j, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("invalid email address %s", destination)}, ErroneousInput: "email address"}
+		return possibleSyncUserId, sessionJobName, errors.InvalidInputError{ContextualError: errors.ContextualError{JobName: sessionJobName, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("invalid email address %s", destination)}, ErroneousInput: "email address"}
 	}
-	u := possibleSyncUserId
-	if u == "" {
-		// TODO: set user ID
-	}
-	d := deliverDoc{u, voiceUserId, j, method, destination}
-	_, err = client.Doc("delivery").Create(ctx, d)
+	syncUserId, err = getUserId(voiceUserId, possibleSyncUserId)
 	if err != nil {
-		return u, j, errors.SystemError{JobName: j, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("could not create delivery command: %s", err)}
+		return
 	}
-	return u, j, nil
+	d := deliverDoc{syncUserId, voiceUserId, sessionJobName, method, destination}
+	_, _, err = client.Collection("delivery").Add(ctx, d)
+	if err != nil {
+		return syncUserId, sessionJobName, errors.SystemError{JobName: sessionJobName, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("could not create delivery command: %s", err)}
+	}
+	return
 }
 
-func SetCursor(jobName, voiceUserId, possibleSyncUserId string) (syncUserId, jobCursor string, err error) {
+func SetCursor(jobName, voiceUserId, possibleSyncUserId string) (syncUserId, sessionJobName string, err error) {
 	if jobName == "" {
 		return possibleSyncUserId, "", errors.MissingJobNameError{JobName: jobName, UserId: voiceUserId, Context: "SetCursor", Log: "could not set cursor without a job name"}
 	}
+	sessionJobName = jobName
 	ref := client.Collection("cursor").Doc(voiceUserId)
-	u := possibleSyncUserId
-	if u == "" {
-		// TODO: set user ID
+	syncUserId, err = getUserId(voiceUserId, possibleSyncUserId)
+	if err != nil {
+		return
 	}
-	c := cursorDoc{UserId: u, Set: time.Now(), JobName: jobName}
+	c := cursorDoc{UserId: syncUserId, Set: time.Now(), JobName: jobName}
 	_, err = ref.Set(ctx, c)
 	if err != nil {
 		err = errors.SystemError{JobName: jobName, UserId: voiceUserId, Context: "SetCursor", Log: fmt.Sprintf("could not set new cursor doc: %s", err)}
 	}
-	return u, jobName, err
+	return
 }
 
 func SyncAccounts(spokenCode string, voiceUserId string, deviceAddress cloud_resources.DeviceAddress) (err error) {
-	s, err := getSyncDoc(spokenCode)
+	s, err := getSyncDoc(spokenCode, "")
 	if err != nil {
 		return err
 	}
@@ -156,10 +155,39 @@ func setJobName(inputName, voiceUserId string) (outputName string, err error) {
 	return
 }
 
-func setUserId(voiceUserId string) (userId string, err error) {
+func getUserId(voiceUserId, possibleSyncUserId string) (userId string, err error) {
 	// check session attributes
+	if possibleSyncUserId != "" {
+		userId = possibleSyncUserId
+		return
+	}
 	// check dynamodb for user mapping
+	um, err := cloud_resources.GetUserMapping(voiceUserId)
+	if err != nil {
+		return
+	}
+	if um != &(cloud_resources.UserMapping{}) {
+		userId = um.SyncUserId
+		return
+	}
 	// check for completed sync doc
+	s, err := getSyncDoc("", voiceUserId)
+	if err != nil {
+		switch err.(type) {
+		case errors.SyncDocNotFoundError:
+			err = errors.UserAccountNotSyncedError{Context: "getUserId", Log: fmt.Sprintf("voice user %s has not yet synced device")}
+			break
+		default:
+			break
+		}
+		return
+	}
+	userId = s.UserId
+	if err = cloud_resources.SaveUserMapping(voiceUserId, userId); err != nil {
+		e := errors.SystemError{UserId:userId, Context:"getUserId", Log:fmt.Sprintf("could not persist sync doc's info to user-mapping database: %s", err)}
+		fmt.Println(e)
+		return userId, nil
+	}
 	return
 }
 
@@ -184,14 +212,12 @@ func isCursorExpired(c cursorDoc) bool {
 }
 
 func isValidEmail(email string) bool {
-	re := regexp.MustCompile(`^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}$`)
+	re := regexp.MustCompile(`^"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,4}"$`)
 	return re.MatchString(email)
 }
 
-func getSyncDoc(spokenCode string) (syncDoc, error) {
-	q := client.Collection("sync").
-		Where("g", "==", spokenCode).
-		Where("a", "==", false)
+func getSyncDoc(spokenCode, voiceUserId string) (syncDoc, error) {
+	q, _ := getQuery(spokenCode, voiceUserId)
 	iter := q.Documents(ctx)
 	s := syncDoc{}
 	defer iter.Stop()
@@ -215,10 +241,24 @@ func getSyncDoc(spokenCode string) (syncDoc, error) {
 		}
 	}
 	if s == (syncDoc{}) {
-		return syncDoc{}, errors.SyncDocNotFoundError{SpokenCode: spokenCode, Context: "getSyncDoc", Log: "cursor doc snapshot doesn't exist"}
+		return syncDoc{}, errors.SyncDocNotFoundError{SpokenCode: spokenCode, Context: "getSyncDoc", Log: fmt.Sprintf("cursor doc snapshot doesn't exist for code %s or userId %s", spokenCode, voiceUserId)}
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "syncDoc: %v", s)
 	return s, nil
+}
+
+func getQuery(syncCode, voiceUserId string) (firestore.Query, error) {
+	if syncCode != "" {
+		return client.Collection("sync").
+			Where("g", "==", syncCode).
+			Where("a", "==", false), nil
+	}
+	if voiceUserId != "" {
+		return client.Collection("sync").
+			Where("v", "==", voiceUserId).
+			Where("a", "==", true), nil
+	}
+	return firestore.Query{}, errors.SystemError{Context: "getQuery", Log: "you need to provide either a syncCode or a voiceUserId!"}
 }
 
 func setSyncDoc(doc syncDoc, syncUserId string) error {

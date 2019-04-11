@@ -31,6 +31,7 @@ func createResponse(outputText string, endSession bool, syncUserId string, jobNa
 	p.Text = outputText
 	r.Version = "1.0"
 	r.Body = alexa.ResBody{OutputSpeech: &p, ShouldEndSession: endSession}
+	r.SessionAttributes = make(map[string]interface{})
 	if !endSession {
 		r.SessionAttributes["syncUserId"] = syncUserId
 		r.SessionAttributes["previousJobCursor"] = jobName
