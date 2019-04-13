@@ -23,6 +23,8 @@ type scanDoc struct {
 	UserId      string `firestore:"u"`
 	VoiceUserId string `firestore:"v"`
 	JobName     string `firestore:"j"`
+	Method      string `firestore:"m"`
+	Destination string `firestore:"d"`
 }
 
 type cursorDoc struct {
@@ -72,7 +74,7 @@ func SendScanCommand(jobName string, voiceUserId, possibleSyncUserId string) (sy
 	if err != nil {
 		return
 	}
-	s := scanDoc{syncUserId, voiceUserId, sessionJobName}
+	s := scanDoc{syncUserId, voiceUserId, sessionJobName,"", ""}
 	if _, _, err := client.Collection("scan").Add(ctx, s); err != nil {
 		return syncUserId, sessionJobName, errors.SystemError{JobName: sessionJobName, UserId: syncUserId, Context: "SendScanCommand", Log: fmt.Sprintf("there was a problem creating the scan command: %s", err)}
 	}
@@ -134,6 +136,25 @@ func SyncAccounts(spokenCode string, voiceUserId string, deviceAddress cloud_res
 	s.SpokenCode = spokenCode
 	s.VoiceUserLocation = deviceAddress.PromptedLocation
 	err = setSyncDoc(s, s.UserId)
+	return
+}
+
+func QuickScanAndDeliver(voiceUserId, possibleSyncUserId, method, destination string) (syncUserId string, err error) {
+	t := string(time.Now().Unix())
+	syncUserId, err = getUserId(voiceUserId, possibleSyncUserId)
+	if err != nil {
+		return
+	}
+	if method != "email" {
+		return "", errors.UnsupportedOperationError{ContextualError: errors.ContextualError{JobName: t, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("method for delivery %s not yet supported", method)}, ErroneousOperation: method}
+	}
+	if !isValidEmail(destination) {
+		return "", errors.InvalidInputError{ContextualError: errors.ContextualError{JobName: t, UserId: voiceUserId, Context: "SendDeliveryCommand", Log: fmt.Sprintf("invalid email address %s", destination)}, ErroneousInput: "email address"}
+	}
+	s := scanDoc{syncUserId, voiceUserId, t,method, destination}
+	if _, _, err := client.Collection("scan").Add(ctx, s); err != nil {
+		return syncUserId, errors.SystemError{JobName: t, UserId: syncUserId, Context: "SendScanCommand", Log: fmt.Sprintf("there was a problem creating the scan command: %s", err)}
+	}
 	return
 }
 

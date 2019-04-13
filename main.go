@@ -21,7 +21,7 @@ TODO:
 - handle default errors better
 - figure out what happens when user says "no" in response to code confirmation
 - figure out better way to give code without multiple prompts
- */
+*/
 
 func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 	var s string
@@ -55,7 +55,7 @@ func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 		if j == "" {
 			j = p
 		}
-		_,_ =fmt.Fprintf(os.Stdout, "going to scan with user %s, and jobname %s", u, j)
+		_, _ = fmt.Fprintf(os.Stdout, "going to scan with user %s, and jobname %s", u, j)
 		r = Scan(j, u, s)
 		break
 	case "emailJob":
@@ -66,6 +66,9 @@ func DispatchIntents(request alexa.Request) (alexa.Response, error) {
 		}
 		r = Deliver(t, j, u, s)
 		break
+	case "scanAndEmail":
+		t := request.Context.System.APIAccessToken
+		r = QuickScanAndSend(t, u, s)
 	case "AMAZON.HelpIntent":
 		r = respond.Welcome()
 		break
@@ -129,12 +132,29 @@ func Deliver(token, jobName, voiceUserId, possibleSyncUserId string) alexa.Respo
 	}
 	defer queue_connect.CloseConnection()
 	email, err := cloud_resources.GetUserEmail(token, voiceUserId)
-	if err := queue_connect.InitConnection("reborne", key); err != nil {
+	if err != nil {
 		return errors.AnalyzeError(err, possibleSyncUserId, jobName)
 	}
 	u, j, err := queue_connect.SendDeliveryCommand(jobName, voiceUserId, possibleSyncUserId, "email", email)
 	if err != nil {
 		return errors.AnalyzeError(err, u, j)
 	}
-	return respond.Positively("email the job " + jobName, false, u, j)
+	return respond.Positively("email the job "+jobName, false, u, j)
+}
+
+func QuickScanAndSend(token, voiceUserId, possibleSyncUserId string) alexa.Response {
+	key := key_access.GetKey()
+	if err := queue_connect.InitConnection("reborne", key); err != nil {
+		return errors.AnalyzeError(err, "", "")
+	}
+	defer queue_connect.CloseConnection()
+	email, err := cloud_resources.GetUserEmail(token, voiceUserId)
+	if err != nil {
+		return errors.AnalyzeError(err, "", "")
+	}
+	u, err := queue_connect.QuickScanAndDeliver(voiceUserId, possibleSyncUserId, "email", email)
+	if err != nil {
+		return errors.AnalyzeError(err, u, "")
+	}
+	return respond.Positively("scan and email this file to you", false, u, "")
 }
